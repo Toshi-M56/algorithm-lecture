@@ -1,0 +1,60 @@
+name: Build and Deploy JupyterLite
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install JupyterLite
+        run: python -m pip install -r requirements.txt
+
+      - name: Download the matching Pyodide
+        run: |
+          PYODIDE_VERSION=$(python - <<'PY'
+          import pathlib, re, sys
+          d = pathlib.Path(sys.prefix, "share/jupyter/labextensions/@jupyterlite/pyodide-kernel-extension")
+          vs = {v for f in d.rglob("*.js") for v in re.findall(r"pyodide/v([0-9.]+)/full", f.read_text(errors="ignore"))}
+          if len(vs) != 1:
+              sys.exit(f"Pyodide version not found uniquely: {vs}")
+          print(vs.pop())
+          PY
+          )
+          echo "Pyodide version: $PYODIDE_VERSION"
+          curl -fsSL -o pyodide.tar.bz2 \
+            "https://github.com/pyodide/pyodide/releases/download/${PYODIDE_VERSION}/pyodide-${PYODIDE_VERSION}.tar.bz2"
+
+      - name: Build the site
+        run: jupyter lite build --pyodide pyodide.tar.bz2 --contents content --output-dir dist
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: ./dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
